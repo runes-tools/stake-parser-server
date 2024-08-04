@@ -7,9 +7,10 @@
     "declarations": true
   },
   "dependencies": {
-    "@scure/btc-signer": "^1.3.2",
+    "bitcoinjs-lib": "^6.1.6",
     "egg": "^3.17.5",
-    "egg-scripts": "2"
+    "egg-scripts": "2",
+    "tiny-secp256k1": "^2.2.3"
   },
   "devDependencies": {
     "egg-bin": "6",

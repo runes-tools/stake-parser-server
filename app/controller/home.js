@@ -15,6 +15,16 @@ class HomeController extends Controller {
     const stake_tx = new StakeTx(tx)
     stake_tx.try_decode()
 
+    const verified = stake_tx.verify()
+
+    if( verified !== true ) {
+      ctx.body = {
+        code: 4002,
+        message: `Check faild.`
+      }
+      return 
+    }
+
     if( !stake_tx.stake ) {
       ctx.body = {
         code: 4001, 
@@ -23,17 +33,18 @@ class HomeController extends Controller {
       return 
     } 
 
-    const { stake, witness_script, p2wsh } = stake_tx
+    const { stake, witness_script, p2tr } = stake_tx
 
+    delete stake['internalPubkey']
     ctx.body = {
       code: 0 , 
       message: 'Ok.',
       data: {
         stake, 
         // script: BytesToHex(witness_script), 
-        witness_script: BytesToHex(p2wsh.witnessScript),
-        script: BytesToHex(p2wsh.script),
-        address: p2wsh.address
+        // witness_script: BytesToHex(p2tr.witness),
+        script: BytesToHex(p2tr.hash),
+        address: p2tr.address
       }
     }
 

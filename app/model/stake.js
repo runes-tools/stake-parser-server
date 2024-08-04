@@ -1,7 +1,10 @@
 const { AssetValue } = require('./asset')
 const { BytesToHex, HexToBytes } = require('../util/hash')
-const bitcoin = require('@scure/btc-signer')
-const { p2wsh , Script, ScriptNum, OP, TEST_NETWORK } = bitcoin
+const bitcoinjs = require('bitcoinjs-lib')
+const ecc = require('tiny-secp256k1')
+const { payments, networks, script, opcodes } = bitcoinjs
+
+bitcoinjs.initEccLib(ecc)
 
 class StakeInput {
     constructor( version, stake, reward, index) {
@@ -31,11 +34,15 @@ class StakeInput {
 }
 
 class StakeDetail {
-    constructor( detail, lock_time, pubkey, network ) {
+    constructor( detail, pubkey, network ) {
         this.detail = detail 
-        this.lock_time = lock_time
-        this.pubkey = pubkey 
-        this.network = network || TEST_NETWORK
+        this.pubkey = pubkey
+        this.internalPubkey = Buffer.from( this.pubkey, 'hex')
+        this.network = network || networks.testnet
+    }
+
+    set_lock_time(time) {
+        this.lock_time = time 
     }
 
     generate_op_return_script() {
@@ -46,29 +53,43 @@ class StakeDetail {
         num += reward.value << 16 
         num += index.value << 24
         
-        return Script.encode([
+        return script.compile([
             'RETURN',
             'OP_16',
-            ScriptNum().encode(num),
-            ScriptNum().encode(this.lock_time),
+            opcodes.OP_RETURN,
+            opcodes.OP_16,
+            script.number.encode(num),
+            // ScriptNum().encode(this.lock_time),
             HexToBytes(this.pubkey)
         ])
     }
 
     generate_witness_script() {
-        return Script.encode([
-            ScriptNum().encode( this.lock_time ),
-            OP.CHECKLOCKTIMEVERIFY,
-            OP.DROP,
-            HexToBytes(this.pubkey),
-            OP.CHECKSIGVERIFY,
+        return script.compile([
+            // ScriptNum().encode( this.lock_time ),
+            script.number.encode( this.lock_time ),
+            opcodes.OP_CHECKLOCKTIMEVERIFY,
+            opcodes.OP_DROP,
+            // OP.CHECKLOCKTIMEVERIFY,
+            // OP.DROP,
+            this.internalPubkey,
+            opcodes.OP_CHECKSIG
         ])
     }
 
-    generate_p2wsh() {
-        return p2wsh({
-            script: this.generate_witness_script() 
-        }, this.network )
+    generate_p2tr() {
+        const output_script = this.generate_witness_script()
+        return payments.p2tr({
+            internalPubkey: this.internalPubkey,
+            scriptTree: {
+                output: output_script
+            },
+            redeem: {
+                output: output_script,
+                redeemVersion: 192
+            },
+            network: this.network
+        })
     }
 
     static try_decode( scriptpubkey_asm ) {
@@ -78,7 +99,8 @@ class StakeDetail {
     }
 
     static decode( scriptpubkey_asm ) {
-        const values = scriptpubkey_asm.split(' ')
+        // const values = scriptpubkey_asm.split(' ')
+        const { values } = scriptpubkey_asm
         const op_codes = values.reverse()
 
         if( op_codes.pop() !== 'OP_RETURN') return null 
@@ -86,9 +108,9 @@ class StakeDetail {
         if( op_codes.pop() !== 'OP_PUSHBYTES_4') return null
         const detail = HexToBytes(op_codes.pop())
 
-        if( op_codes.pop() !== 'OP_PUSHBYTES_4') return null
+        // if( op_codes.pop() !== 'OP_PUSHBYTES_4') return null
         // const lock_time = HexToBytes(op_codes.pop())
-        const lock_time = Buffer.from(op_codes.pop(), 'hex').readUInt32LE(0)
+        // const lock_time = Buffer.from(op_codes.pop(), 'hex').readUInt32LE(0)
 
         if( op_codes.pop() !== 'OP_PUSHBYTES_32') return null 
         // const pubkey = HexToBytes(op_codes.pop())
@@ -100,7 +122,6 @@ class StakeDetail {
         // to int64
         return new StakeDetail(
             input, 
-            lock_time, 
             pubkey
         )
 
@@ -115,6 +136,7 @@ class StakeTx {
         this.tx = tx 
         this.vout = tx.vout 
         this.stake = null 
+        this.lock_time = tx.locktime
     }
 
     op_detail() {
@@ -139,11 +161,14 @@ class StakeTx {
 
     try_decode() {
         const op_detail = this.op_detail()
-        const detail = StakeDetail.decode( op_detail.text)
+        const detail = StakeDetail.decode( op_detail)
+
+        detail.set_lock_time( this.lock_time)
 
         this.stake = detail 
         this.witness_script = detail.generate_witness_script()
-        this.p2wsh = detail.generate_p2wsh()
+        // this.p2wsh = detail.generate_p2wsh()
+        this.p2tr = detail.generate_p2tr()
         // console.log( detail )
 
         // console.log( detail.generate_op_return_script() )
@@ -152,11 +177,11 @@ class StakeTx {
 
     verify() {
         if( !this.stake ) return false 
-        const p2wsh = this.stake.generate_p2wsh()
+        const p2tr = this.stake.generate_p2tr()
         
         const output = this.vout[ this.stake.detail.index - 1]
-        
-        return p2wsh.address === output.scriptpubkey_address
+
+        return p2tr.address === output.scriptpubkey_address
     }
 
 }
